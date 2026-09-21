@@ -1,0 +1,86 @@
+# docsync — keep Confluence in sync with __DOCS_DIR__/*.md
+#
+# Job 1 (PR gate):    pipeline code changed  =>  __DOCS_DIR__ or .docsync/audit.jsonl must change too.
+#                     Run /docsync:update in your branch; it updates pages or records an explicit exclusion.
+# Job 2 (publish):    on merge to trunk, push changed pages + regenerate the Change Log page.
+#
+# Required repo secrets: CONFLUENCE_BASE_URL, CONFLUENCE_EMAIL, CONFLUENCE_API_TOKEN
+name: docsync
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - "__DOCS_DIR__/**"
+      - ".docsync/**"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Republish every page even if unchanged"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  gate:
+    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'docs-not-needed')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r .docsync/bin/requirements.txt
+      - name: Docs gate
+        run: python .docsync/bin/docsync.py gate --base origin/${{ github.base_ref }}
+
+  # Optional: let Claude evaluate the diff in CI instead of relying on the developer running /docsync:update.
+  # Requires ANTHROPIC_API_KEY secret and the plugin published to a git marketplace.
+  # ai-check:
+  #   if: github.event_name == 'pull_request'
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with: { fetch-depth: 0 }
+  #     - uses: anthropics/claude-code-action@v1
+  #       with:
+  #         anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+  #         plugin_marketplaces: "https://github.com/<org>/<docsync-repo>"
+  #         plugins: "docsync@<marketplace-name>"
+  #         prompt: "/docsync:check --base origin/${{ github.base_ref }}"
+  #         claude_args: "--max-turns 30"
+
+  # --- publish-job-start
+  publish:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    concurrency: docsync-publish
+    env:
+      CONFLUENCE_BASE_URL: ${{ secrets.CONFLUENCE_BASE_URL }}
+      CONFLUENCE_EMAIL: ${{ secrets.CONFLUENCE_EMAIL }}
+      CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r .docsync/bin/requirements.txt
+      - name: Publish to Confluence
+        run: |
+          python .docsync/bin/docsync.py push --json \
+            ${{ inputs.force && '--force' || '' }} \
+            --commit "${GITHUB_SHA}" | tee docsync-result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docsync-result
+          path: docsync-result.json
+  # --- publish-job-end
