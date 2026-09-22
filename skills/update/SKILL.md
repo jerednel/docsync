@@ -4,7 +4,7 @@ description: Evaluate the code changes in this branch or worktree for documentat
 argument-hint: "[--base <ref>] [notes about the change]"
 allowed-tools: Bash Read Edit Write Grep Glob
 ---
-> **Paths.** A repo holds one docsync case per project. `<case_dir>` is `.docsync/cases/<case>/` (or `.docsync/` in a single-case repo) and holds `config.yaml`, `case-context.md`, `audit.jsonl`. `<docs_dir>` is the `docs_dir` in that config (default `docs/<case>/`, or `docs/confluence/` in a single-case repo). `python3 .docsync/bin/docsync.py status` lists the cases. With several, work on the case whose `watch_paths` match the change and pass `--case <case>` to every docsync command.
+> **Paths.** A repo holds one docsync project per team or workstream. `<project_dir>` is `.docsync/projects/<project>/` (or `.docsync/` in a single-project repo) and holds `config.yaml`, `project-context.md`, `audit.jsonl`. `<docs_dir>` is the `docs_dir` in that config (default `docs/<project>/`, or `docs/confluence/` in a single-project repo). `python3 .docsync/bin/docsync.py status` lists the projects. With several, work on the project whose `watch_paths` match the change and pass `--project <project>` to every docsync command.
 
 
 You are keeping Confluence documentation in lock-step with the code. The docs are markdown files in
@@ -25,7 +25,7 @@ Rubric and rules — read all three before step 3, they are short:
 
 ## Steps
 
-1. **Load the brief.** Read `<case_dir>/case-context.md` and `<case_dir>/config.yaml`. Skim `<docs_dir>/*.md`
+1. **Load the brief.** Read `<project_dir>/project-context.md` and `<project_dir>/config.yaml`. Skim `<docs_dir>/*.md`
    so you know what is already documented. Done when you can say in one sentence what this project's data is for
    and who the readers are.
 
@@ -56,11 +56,11 @@ Rubric and rules — read all three before step 3, they are short:
    - If Confluence credentials are in the environment: `python3 .docsync/bin/docsync.py plan` to preview.
 
 7. **Report.** Show the user a table: change → verdict → category → page(s). Then the exact files to commit
-   (`<docs_dir>/...`, `<case_dir>/audit.jsonl`) and remind them these go in the same PR as the code.
+   (`<docs_dir>/...`, `<project_dir>/audit.jsonl`) and remind them these go in the same PR as the code.
    Do not commit unless asked.
 
 ## Hard rules
-- Never edit files outside `<docs_dir>/` and `<case_dir>/audit.jsonl` in this skill.
+- Never edit files outside `<docs_dir>/` and `<project_dir>/audit.jsonl` in this skill.
 - Never delete a page file without saying so; orphaned Confluence pages are archived by a human.
-- If the case context is silent on something the docs need (an owner, a cadence), write
+- If the project context is silent on something the docs need (an owner, a cadence), write
   "Unknown — <role> to confirm" in the page and say so in the report. Do not invent facts.

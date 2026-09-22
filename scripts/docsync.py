@@ -2,14 +2,14 @@
 """
 docsync — keep a scoped Confluence page tree in sync with docs-as-code markdown.
 
-Source of truth: <repo>/<docs_dir>/*.md  (one file = one Confluence page; docs_dir is per case,
-default docs/confluence for a single-case repo, docs/<case> when a repo holds several projects)
+Source of truth: <repo>/<docs_dir>/*.md  (one file = one Confluence page; docs_dir is per project,
+default docs/confluence for a single-project repo, docs/<project> when a repo holds several projects)
 Config:          <repo>/.docsync/config.yaml
 Audit log:       <repo>/.docsync/audit.jsonl   (one JSON object per line)
 
 Subcommands
-  init      bootstrap a case: config, brief, audit log, page templates, CI workflow (once per project)
-  migrate   move a single-case repo to the multi-case layout .docsync/cases/<case>/
+  init      bootstrap a project: config, brief, audit log, page templates, CI workflow (once per project)
+  migrate   move a single-project repo to the multi-project layout .docsync/projects/<project>/
   doctor    verify credentials, root page, space and print the in-scope page tree
   changed   list files changed since a base ref, bucketed as watch/ignore/docs/other
   render    print the Confluence storage XML for one markdown page
@@ -19,6 +19,7 @@ Subcommands
   status    offline summary: pages, audit tail, docs diff vs base
   pull      download existing pages under the root to .docsync/imported/ (input for backfill)
   merge-publish  verify the PR is documented, merge it with gh, publish from trunk (no CI secrets needed)
+  upgrade   refresh the vendored tool in .docsync/bin; renames the pre-0.3 .docsync/cases/ layout to .docsync/projects/
 
 Every write is checked against the configured root page: a page is only ever
 created under, or updated within, the root page's subtree. Pages are never deleted.
@@ -60,8 +61,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPT_DIR.parent
 CONFIG_REL = Path(".docsync/config.yaml")
 AUDIT_REL = Path(".docsync/audit.jsonl")
-CONTEXT_REL = Path(".docsync/case-context.md")
-CASES_REL = Path(".docsync/cases")           # multi-case layout: one sub-directory per project
+CONTEXT_REL = Path(".docsync/project-context.md")
+PROJECTS_REL = Path(".docsync/projects")     # multi-project layout: one sub-directory per project
+LEGACY_PROJECTS_REL = Path(".docsync/cases")  # pre-0.3 name of PROJECTS_REL; `docsync upgrade` renames it
 SHARED_KEYS = ("base_branch", "publish_mode", "overwrite_manual_edits", "changelog_page")
 PROP_KEY = "docsync"
 CHANGELOG_TITLE = "Change Log"
@@ -80,7 +82,7 @@ AUDIT_CATEGORIES = {
 AUDIT_VERDICTS = {"documented", "excluded"}
 
 DEFAULT_CONFIG: Dict = {
-    "case_name": "",
+    "project_name": "",
     "confluence": {
         "base_url_env": "CONFLUENCE_BASE_URL",
         "space_key": "",
@@ -138,69 +140,75 @@ def _read_yaml(path: Path) -> Dict:
     if yaml is None:
         die("pyyaml is required: pip install pyyaml")
     with open(path) as fh:
-        return yaml.safe_load(fh) or {}
+        data = yaml.safe_load(fh) or {}
+    if "case_name" in data and not data.get("project_name"):   # pre-0.3 key; `docsync upgrade` rewrites the file
+        data["project_name"] = data.pop("case_name")
+    return data
 
 
-def list_cases(root: Path) -> List[str]:
-    """Case names in the multi-case layout (.docsync/cases/<case>/config.yaml). Empty for a single-case repo."""
-    d = root / CASES_REL
+def list_projects(root: Path) -> List[str]:
+    """Project names in the multi-project layout (.docsync/projects/<project>/config.yaml). Empty for a single-project repo."""
+    d = root / PROJECTS_REL
     return sorted(p.parent.name for p in d.glob("*/config.yaml")) if d.is_dir() else []
 
 
-def load_config(root: Path, case: Optional[str] = None) -> Dict:
-    """Effective config for one case.
+def load_config(root: Path, project: Optional[str] = None) -> Dict:
+    """Effective config for one project.
 
     Layouts:
-      single  .docsync/config.yaml + case-context.md + audit.jsonl          (what the first `init` creates)
+      single  .docsync/config.yaml + project-context.md + audit.jsonl          (what the first `init` creates)
       multi   .docsync/config.yaml  = shared settings (base_branch, publish_mode, ...)
-              .docsync/cases/<case>/{config.yaml, case-context.md, audit.jsonl}   one per project / team
-    `docsync migrate` (or a second `init --case-name`) moves a repo from single to multi.
+              .docsync/projects/<project>/{config.yaml, project-context.md, audit.jsonl}   one per project / team
+    `docsync migrate` (or a second `init --project-name`) moves a repo from single to multi.
     """
-    cases = list_cases(root)
+    projects = list_projects(root)
+    if not projects and (root / LEGACY_PROJECTS_REL).is_dir():
+        die(f"this repo still uses the pre-0.3 layout {LEGACY_PROJECTS_REL}/. Run `python3 .docsync/bin/docsync.py upgrade` "
+            f"(or `docsync upgrade` from the plugin) to rename it to {PROJECTS_REL}/, then commit the moves.")
     shared_path = root / CONFIG_REL
     shared = _read_yaml(shared_path) if shared_path.exists() else None
-    if not cases:
+    if not projects:
         if shared is None:
             die(f"{shared_path} not found. Run `docsync init` (or /docsync:init) in this repo first.")
-        name = (shared.get("case_name") or "").strip()
-        if case and case != name:
-            die(f"no case '{case}' here; this repo has the single case '{name or '(unnamed)'}'")
+        name = (shared.get("project_name") or "").strip()
+        if project and project != name:
+            die(f"no project '{project}' here; this repo has the single project '{name or '(unnamed)'}'")
         cfg = deep_merge(DEFAULT_CONFIG, shared)
-        case_dir = root / ".docsync"
+        project_dir = root / ".docsync"
     else:
-        case = case or os.environ.get("DOCSYNC_CASE") or (cases[0] if len(cases) == 1 else None)
-        if not case:
-            die(f"this repo has several docsync cases ({', '.join(cases)}). Pass --case <name> or set DOCSYNC_CASE.")
-        if case not in cases:
-            die(f"no case '{case}' under {CASES_REL}/ (have: {', '.join(cases)})")
-        case_dir = root / CASES_REL / case
-        cfg = deep_merge(deep_merge(DEFAULT_CONFIG, shared or {}), _read_yaml(case_dir / "config.yaml"))
-        if not (cfg.get("case_name") or "").strip():
-            cfg["case_name"] = case
+        project = project or os.environ.get("DOCSYNC_PROJECT") or (projects[0] if len(projects) == 1 else None)
+        if not project:
+            die(f"this repo has several docsync projects ({', '.join(projects)}). Pass --project <name> or set DOCSYNC_PROJECT.")
+        if project not in projects:
+            die(f"no project '{project}' under {PROJECTS_REL}/ (have: {', '.join(projects)})")
+        project_dir = root / PROJECTS_REL / project
+        cfg = deep_merge(deep_merge(DEFAULT_CONFIG, shared or {}), _read_yaml(project_dir / "config.yaml"))
+        if not (cfg.get("project_name") or "").strip():
+            cfg["project_name"] = project
     cfg["_root"] = str(root)
-    cfg["_case_dir"] = str(case_dir)
-    cfg["_case_rel"] = case_dir.relative_to(root).as_posix().rstrip("/") + "/"
-    # the key used for --case, scratch dirs and per-case result maps: the directory name in the multi layout
-    cfg["_case"] = case_dir.name if cases else (cfg.get("case_name") or "default")
+    cfg["_project_dir"] = str(project_dir)
+    cfg["_project_rel"] = project_dir.relative_to(root).as_posix().rstrip("/") + "/"
+    # the key used for --project, scratch dirs and per-project result maps: the directory name in the multi layout
+    cfg["_project"] = project_dir.name if projects else (cfg.get("project_name") or "default")
     return cfg
 
 
-def load_all_configs(root: Path, case: Optional[str] = None) -> List[Dict]:
-    """Every case in the repo, or just `case`. A single-case repo yields one."""
-    cases = list_cases(root)
-    if case or not cases:
-        return [load_config(root, case)]
-    return [load_config(root, c) for c in cases]
+def load_all_configs(root: Path, project: Optional[str] = None) -> List[Dict]:
+    """Every project in the repo, or just `project`. A single-project repo yields one."""
+    projects = list_projects(root)
+    if project or not projects:
+        return [load_config(root, project)]
+    return [load_config(root, c) for c in projects]
 
 
 def context_path(cfg: Dict) -> Path:
-    return Path(cfg["_case_dir"]) / "case-context.md"
+    return Path(cfg["_project_dir"]) / "project-context.md"
 
 
 def scratch_dir(cfg: Dict, kind: str) -> Path:
-    """Gitignored working dirs: .docsync/<kind>/ in a single-case repo, .docsync/<kind>/<case>/ with several."""
+    """Gitignored working dirs: .docsync/<kind>/ in a single-project repo, .docsync/<kind>/<project>/ with several."""
     base = Path(cfg["_root"]) / ".docsync" / kind
-    return base / cfg["_case"] if list_cases(Path(cfg["_root"])) else base
+    return base / cfg["_project"] if list_projects(Path(cfg["_root"])) else base
 
 
 def parse_page_id(value: str) -> str:
@@ -443,7 +451,7 @@ def render_pages(cfg: Dict, pages: List[Page]) -> List[str]:
 
 # ----------------------------------------------------------------------------- audit log
 def audit_path(cfg: Dict) -> Path:
-    return Path(cfg.get("_case_dir") or (Path(cfg["_root"]) / ".docsync")) / "audit.jsonl"
+    return Path(cfg.get("_project_dir") or (Path(cfg["_root"]) / ".docsync")) / "audit.jsonl"
 
 
 def read_audit(cfg: Dict) -> List[Dict]:
@@ -500,7 +508,7 @@ def audit_add(cfg: Dict, entry: Dict) -> Dict:
     return entry
 
 
-def render_changelog(entries: List[Dict], case_name: str) -> str:
+def render_changelog(entries: List[Dict], project_name: str) -> str:
     """Markdown for the Change Log page, newest first."""
     documented = [e for e in entries if e.get("verdict") == "documented"]
     excluded = [e for e in entries if e.get("verdict") == "excluded"]
@@ -673,7 +681,7 @@ def client_from_env(cfg: Dict, dry_run: bool = False) -> Confluence:
     if missing:
         die(f"missing environment variables: {', '.join(missing)}")
     if not c.get("root_page_id"):
-        die(f"confluence.root_page_id is not set in {cfg.get('_case_rel', '.docsync/')}config.yaml")
+        die(f"confluence.root_page_id is not set in {cfg.get('_project_rel', '.docsync/')}config.yaml")
     return Confluence(base, email, token, str(c["root_page_id"]), dry_run=dry_run)
 
 
@@ -687,7 +695,7 @@ def sync(cfg: Dict, client: Confluence, commit: str, pr: Optional[str], respect_
     root = Path(cfg["_root"])
 
     if cfg.get("changelog_page", True):
-        cl_md = render_changelog(read_audit(cfg), cfg.get("case_name", ""))
+        cl_md = render_changelog(read_audit(cfg), cfg.get("project_name", ""))
         cl = Page(audit_path(cfg), CHANGELOG_TITLE, None, 9999, cl_md)
         cl.storage = md_to_storage(cl_md)
         cl.hash = content_hash(cl.storage)
@@ -776,8 +784,8 @@ def glob_match(path: str, pattern: str) -> bool:
 
 def bucket_for(path: str, cfg: Dict) -> str:
     docs_dir = cfg["docs_dir"].rstrip("/") + "/"
-    case_rel = cfg.get("_case_rel", ".docsync/")   # ".docsync/" single-case, ".docsync/cases/<case>/" multi
-    if path.startswith(docs_dir) or path.startswith(case_rel):
+    project_rel = cfg.get("_project_rel", ".docsync/")   # ".docsync/" single-project, ".docsync/projects/<project>/" multi
+    if path.startswith(docs_dir) or path.startswith(project_rel):
         return "docs"
     if any(glob_match(path, g) for g in cfg.get("ignore_paths", [])):
         return "ignore"
@@ -836,13 +844,13 @@ def strip_publish_job(workflow: str) -> str:
                             "# No repo secrets required in local mode.\n")
 
 
-SHARED_CONFIG_TEXT = """# docsync shared settings. Every case in .docsync/cases/<case>/config.yaml inherits these
+SHARED_CONFIG_TEXT = """# docsync shared settings. Every project in .docsync/projects/<project>/config.yaml inherits these
 # unless it sets its own. Secrets are NOT stored here: set CONFLUENCE_BASE_URL, CONFLUENCE_EMAIL,
 # CONFLUENCE_API_TOKEN locally and as CI secrets.
 #
 # Add another project to this repo:
-#   docsync init --case-name <name> --space <KEY> --root-page <page url> --title-prefix '[<name>] '
-# It creates .docsync/cases/<name>/ and docs/<name>/ and adds the docs dir to the CI workflow.
+#   docsync init --project-name <name> --space <KEY> --root-page <page url> --title-prefix '[<name>] '
+# It creates .docsync/projects/<name>/ and docs/<name>/ and adds the docs dir to the CI workflow.
 base_branch: {base_branch}
 publish_mode: {publish_mode}
 overwrite_manual_edits: {overwrite_manual_edits}
@@ -866,23 +874,23 @@ def _yaml_bool(v) -> str:
     return "true" if v in (True, None, "true", "True") else "false"
 
 
-def migrate_to_cases(root: Path) -> Optional[str]:
-    """Move a single-case repo to .docsync/cases/<case>/. Returns the case slug, or None if there is nothing to move."""
-    if list_cases(root):
+def migrate_to_projects(root: Path) -> Optional[str]:
+    """Move a single-project repo to .docsync/projects/<project>/. Returns the project slug, or None if there is nothing to move."""
+    if list_projects(root):
         return None
     legacy = root / CONFIG_REL
     if not legacy.exists():
         return None
     cfg = _read_yaml(legacy)
-    if not (cfg.get("confluence") or {}).get("root_page_id") and not cfg.get("case_name"):
-        return None   # already a shared-settings file, not a case
-    slug = _slug(cfg.get("case_name") or root.name)
-    case_dir = root / CASES_REL / slug
-    case_dir.mkdir(parents=True, exist_ok=True)
-    for fname in ("config.yaml", "case-context.md", "audit.jsonl"):
+    if not (cfg.get("confluence") or {}).get("root_page_id") and not cfg.get("project_name"):
+        return None   # already a shared-settings file, not a project
+    slug = _slug(cfg.get("project_name") or root.name)
+    project_dir = root / PROJECTS_REL / slug
+    project_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ("config.yaml", "project-context.md", "audit.jsonl"):
         src = root / ".docsync" / fname
         if src.exists():
-            _move(root, src, case_dir / fname)
+            _move(root, src, project_dir / fname)
     legacy.write_text(SHARED_CONFIG_TEXT.format(
         base_branch=cfg.get("base_branch", "main"), publish_mode=cfg.get("publish_mode", "ci"),
         overwrite_manual_edits=_yaml_bool(cfg.get("overwrite_manual_edits")),
@@ -903,14 +911,14 @@ def add_workflow_docs_path(wf_text: str, docs_dir_rel: str) -> str:
 
 def cmd_migrate(args: argparse.Namespace) -> None:
     root = repo_root()
-    if list_cases(root):
-        log("already in the multi-case layout: " + ", ".join(list_cases(root)))
+    if list_projects(root):
+        log("already in the multi-project layout: " + ", ".join(list_projects(root)))
         return
-    slug = migrate_to_cases(root)
+    slug = migrate_to_projects(root)
     if not slug:
-        die(f"nothing to migrate: {CONFIG_REL} is missing or holds no case")
-    print(json.dumps({"migrated_case": slug, "case_dir": str(CASES_REL / slug), "shared_config": str(CONFIG_REL)}, indent=2))
-    log("Commit the moves. Commands find the case automatically while it is the only one; pass --case once there are several.")
+        die(f"nothing to migrate: {CONFIG_REL} is missing or holds no project")
+    print(json.dumps({"migrated_project": slug, "project_dir": str(PROJECTS_REL / slug), "shared_config": str(CONFIG_REL)}, indent=2))
+    log("Commit the moves. Commands find the project automatically while it is the only one; pass --project once there are several.")
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -918,54 +926,54 @@ def cmd_init(args: argparse.Namespace) -> None:
     tpl = PLUGIN_ROOT / "templates"
     if not tpl.exists():
         die(f"templates not found at {tpl}; run init from the plugin checkout, not the vendored copy")
-    case_name = (args.case_name or "").strip()
-    cases = list_cases(root)
+    project_name = (args.project_name or "").strip()
+    projects = list_projects(root)
     single_cfg = root / CONFIG_REL
 
-    # An existing single-case repo: same case => needs --force; different case => move it aside first.
-    if single_cfg.exists() and not cases:
-        existing = (_read_yaml(single_cfg).get("case_name") or "").strip()
-        if not case_name or case_name == existing:
+    # An existing single-project repo: same project => needs --force; different project => move it aside first.
+    if single_cfg.exists() and not projects:
+        existing = (_read_yaml(single_cfg).get("project_name") or "").strip()
+        if not project_name or project_name == existing:
             if not args.force:
-                die(f"{single_cfg} already exists for case '{existing}'. Use --force to overwrite its config, "
-                    f"or --case-name <other project> to add a second case alongside it.")
+                die(f"{single_cfg} already exists for project '{existing}'. Use --force to overwrite its config, "
+                    f"or --project-name <other project> to add a second project alongside it.")
         else:
-            moved = migrate_to_cases(root)
-            log(f"moved existing case '{moved}' to {CASES_REL / moved}/; shared settings now live in {CONFIG_REL}")
-            cases = list_cases(root)
+            moved = migrate_to_projects(root)
+            log(f"moved existing project '{moved}' to {PROJECTS_REL / moved}/; shared settings now live in {CONFIG_REL}")
+            projects = list_projects(root)
 
-    if cases:
-        if not case_name:
-            die(f"this repo already has docsync cases ({', '.join(cases)}); pass --case-name <name> for the new project")
-        slug = _slug(case_name)
-        case_dir = root / CASES_REL / slug
-        if (case_dir / "config.yaml").exists() and not args.force:
-            die(f"case '{slug}' already exists at {case_dir}; use --force to overwrite its config only")
+    if projects:
+        if not project_name:
+            die(f"this repo already has docsync projects ({', '.join(projects)}); pass --project-name <name> for the new project")
+        slug = _slug(project_name)
+        project_dir = root / PROJECTS_REL / slug
+        if (project_dir / "config.yaml").exists() and not args.force:
+            die(f"project '{slug}' already exists at {project_dir}; use --force to overwrite its config only")
         docs_dir_rel = (args.docs_dir or f"docs/{slug}").rstrip("/")
     else:
-        case_dir = root / ".docsync"
+        project_dir = root / ".docsync"
         docs_dir_rel = (args.docs_dir or "docs/confluence").rstrip("/")
-    case_dir.mkdir(parents=True, exist_ok=True)
+    project_dir.mkdir(parents=True, exist_ok=True)
 
     root_page_id = parse_page_id(args.root_page) if args.root_page else ""
     config_text = (tpl / "config.yaml").read_text(encoding="utf-8")
     config_text = (config_text.replace("__PUBLISH_MODE__", args.publish_mode)
-                   .replace("__CASE_NAME__", case_name or root.name)
+                   .replace("__PROJECT_NAME__", project_name or root.name)
                    .replace("__SPACE_KEY__", args.space or "")
                    .replace("__ROOT_PAGE_ID__", root_page_id)
                    .replace("__TITLE_PREFIX__", args.title_prefix or "")
                    .replace("__BASE_BRANCH__", args.base_branch or "main")
                    .replace("__DOCS_DIR__", docs_dir_rel))
-    if cases:
-        # shared keys live in .docsync/config.yaml; drop them from the case file so they are not duplicated
+    if projects:
+        # shared keys live in .docsync/config.yaml; drop them from the project file so they are not duplicated
         config_text = re.sub(r"^(?:%s):.*\n" % "|".join(SHARED_KEYS), "", config_text, flags=re.M)
         config_text += ("\n# base_branch, publish_mode, overwrite_manual_edits and changelog_page are inherited from\n"
-                        "# .docsync/config.yaml (shared by every case in this repo). Set one here only to override it.\n")
+                        "# .docsync/config.yaml (shared by every project in this repo). Set one here only to override it.\n")
         if not single_cfg.exists():
             single_cfg.write_text(SHARED_CONFIG_TEXT.format(
                 base_branch=args.base_branch or "main", publish_mode=args.publish_mode,
                 overwrite_manual_edits="true", changelog_page="true"), encoding="utf-8")
-    cfg_path = case_dir / "config.yaml"
+    cfg_path = project_dir / "config.yaml"
     cfg_path.write_text(config_text, encoding="utf-8")
     created = [str(cfg_path.relative_to(root))]
 
@@ -976,8 +984,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         shutil.copyfile(src, dst)
         created.append(str(dst.relative_to(root)))
 
-    copy_if_missing(tpl / "case-context.md", case_dir / "case-context.md")
-    audit = case_dir / "audit.jsonl"
+    copy_if_missing(tpl / "project-context.md", project_dir / "project-context.md")
+    audit = project_dir / "audit.jsonl"
     if not audit.exists():
         audit.write_text("", encoding="utf-8")
         created.append(str(audit.relative_to(root)))
@@ -1010,9 +1018,34 @@ def cmd_init(args: argparse.Namespace) -> None:
     if wanted:
         with open(gitignore, "a") as fh:
             fh.write("\n# docsync scratch (dry-run output, pulled Confluence pages)\n" + "\n".join(wanted) + "\n")
-    print(json.dumps({"root": str(root), "case": case_name or root.name, "case_dir": str(case_dir.relative_to(root)),
+    print(json.dumps({"root": str(root), "project": project_name or root.name, "project_dir": str(project_dir.relative_to(root)),
                       "docs_dir": docs_dir_rel, "created": created}, indent=2))
-    log(f"\nNext: fill in {case_dir.relative_to(root)}/case-context.md, set CONFLUENCE_* env vars, then run `docsync doctor`.")
+    log(f"\nNext: fill in {project_dir.relative_to(root)}/project-context.md, set CONFLUENCE_* env vars, then run `docsync doctor`.")
+
+
+def upgrade_legacy_names(root: Path) -> List[str]:
+    """Rename the pre-0.3 'case' vocabulary in a repo: .docsync/cases/ -> .docsync/projects/,
+    case-context.md -> project-context.md, `case_name:` -> `project_name:` in every config. Idempotent."""
+    changed: List[str] = []
+    old_dir = root / LEGACY_PROJECTS_REL
+    if old_dir.is_dir() and not (root / PROJECTS_REL).exists():
+        _move(root, old_dir, root / PROJECTS_REL)
+        changed.append(f"{LEGACY_PROJECTS_REL}/ -> {PROJECTS_REL}/")
+    dirs = [root / ".docsync"] + [p.parent for p in (root / PROJECTS_REL).glob("*/config.yaml")]
+    for d in dirs:
+        old_ctx, new_ctx = d / "case-context.md", d / "project-context.md"
+        if old_ctx.exists() and not new_ctx.exists():
+            _move(root, old_ctx, new_ctx)
+            changed.append(f"{old_ctx.relative_to(root)} -> {new_ctx.relative_to(root)}")
+        cfg = d / "config.yaml"
+        if cfg.exists():
+            text = cfg.read_text(encoding="utf-8")
+            new = re.sub(r"^case_name:", "project_name:", text, flags=re.M)
+            new = new.replace(".docsync/cases/<case>/", ".docsync/projects/<project>/").replace("--case-name", "--project-name")
+            if new != text:
+                cfg.write_text(new, encoding="utf-8")
+                changed.append(f"{cfg.relative_to(root)}: case_name -> project_name")
+    return changed
 
 
 def cmd_upgrade(args: argparse.Namespace) -> None:
@@ -1023,19 +1056,21 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
     shutil.copyfile(SCRIPT_DIR / "docsync.py", bin_dir / "docsync.py")
     shutil.copyfile(SCRIPT_DIR / "requirements.txt", bin_dir / "requirements.txt")
     log(f"vendored copy updated in {bin_dir}")
+    for line in upgrade_legacy_names(root):
+        log(f"renamed  {line}")
 
 
 # ----------------------------------------------------------------------------- commands
 def cmd_doctor(args: argparse.Namespace) -> None:
     bad = False
-    cfgs = load_all_configs(repo_root(), args.case)
+    cfgs = load_all_configs(repo_root(), args.project)
     for cfg in cfgs:
         client = client_from_env(cfg)
         scope = client.scope()
         root = scope[client.root_page_id]
         space = client.get_space(root["spaceId"])
         ok_space = not cfg["confluence"].get("space_key") or space.get("key") == cfg["confluence"]["space_key"]
-        print(f"case      : {cfg.get('case_name')}  ({cfg['_case_rel']}config.yaml)")
+        print(f"project      : {cfg.get('project_name')}  ({cfg['_project_rel']}config.yaml)")
         print(f"root page : {root['title']} (id {client.root_page_id})")
         print(f"space     : {space.get('key')} — {space.get('name')}  {'OK' if ok_space else 'MISMATCH with config'}")
         print(f"in scope  : {len(scope) - 1} page(s) under root")
@@ -1066,8 +1101,8 @@ def storage_to_text(storage: str) -> str:
 
 
 def cmd_pull(args: argparse.Namespace) -> None:
-    """Download every page under each case's root into .docsync/imported/[<case>/] (read-only; used by backfill)."""
-    for cfg in load_all_configs(repo_root(), args.case):
+    """Download every page under each project's root into .docsync/imported/[<project>/] (read-only; used by backfill)."""
+    for cfg in load_all_configs(repo_root(), args.project):
         root = Path(cfg["_root"])
         client = client_from_env(cfg)
         out = scratch_dir(cfg, "imported")
@@ -1085,29 +1120,29 @@ def cmd_pull(args: argparse.Namespace) -> None:
                           "file": f"{out_rel}/{slug}.txt"})
         (out / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")
         print(json.dumps(index, indent=2))
-        log(f"[{cfg.get('case_name')}] {len(index)} page(s) saved under {out} (root included). These files are inputs, not published pages.")
+        log(f"[{cfg.get('project_name')}] {len(index)} page(s) saved under {out} (root included). These files are inputs, not published pages.")
 
 
 def cmd_changed(args: argparse.Namespace) -> None:
-    cfgs = load_all_configs(repo_root(), args.case)
-    res = {cfg["_case"]: changed_files(cfg, args.base) for cfg in cfgs}
+    cfgs = load_all_configs(repo_root(), args.project)
+    res = {cfg["_project"]: changed_files(cfg, args.base) for cfg in cfgs}
     print(json.dumps(res if len(cfgs) > 1 else next(iter(res.values())), indent=2))
 
 
 def cmd_gate(args: argparse.Namespace) -> None:
-    """CI gate, per case: watched code changed => that case's docs or audit log must have changed too."""
-    cfgs = load_all_configs(repo_root(), args.case)
+    """CI gate, per project: watched code changed => that project's docs or audit log must have changed too."""
+    cfgs = load_all_configs(repo_root(), args.project)
     failed = False
     for cfg in cfgs:
         ch = changed_files(cfg, args.base)
         watched = [f["path"] for f in ch["files"] if f["bucket"] == "watch"]
         docs = [f["path"] for f in ch["files"] if f["bucket"] == "docs"]
         if len(cfgs) > 1:
-            print(f"case {cfg['case_name']}:")
+            print(f"project {cfg['project_name']}:")
         print(f"base {ch['base']} ({ch['merge_base']}) -> {ch['head']} on {ch['branch']}")
         print(f"watched files changed: {len(watched)}   docs/audit files changed: {len(docs)}")
         if watched and not docs:
-            print(f"\nFAIL: pipeline code changed but neither {cfg['docs_dir']}/ nor {cfg['_case_rel']}audit.jsonl did.")
+            print(f"\nFAIL: pipeline code changed but neither {cfg['docs_dir']}/ nor {cfg['_project_rel']}audit.jsonl did.")
             print("Every change to watched code must be evaluated: run /docsync:update in the branch.")
             print("It will either update the relevant page(s) or record an 'excluded' audit entry explaining why not.")
             for f in watched[:50]:
@@ -1123,7 +1158,7 @@ def cmd_gate(args: argparse.Namespace) -> None:
 
 def cmd_render(args: argparse.Namespace) -> None:
     target = Path(args.file).resolve()
-    cfgs = load_all_configs(repo_root(), args.case)
+    cfgs = load_all_configs(repo_root(), args.project)
     for cfg in cfgs:
         docs_dir = (Path(cfg["_root"]) / cfg["docs_dir"]).resolve()
         if docs_dir not in target.parents:
@@ -1139,7 +1174,7 @@ def cmd_render(args: argparse.Namespace) -> None:
 
 def cmd_push(args: argparse.Namespace, dry_run: bool = False) -> None:
     root = repo_root()
-    cfgs = load_all_configs(root, args.case)
+    cfgs = load_all_configs(root, args.project)
     commit = detect_commit(args.commit, cwd=root)
     pr = detect_pr_number(args.pr, cwd=root)
     results = {}
@@ -1152,9 +1187,9 @@ def cmd_push(args: argparse.Namespace, dry_run: bool = False) -> None:
         except ScopeError as exc:
             die(str(exc), code=3)
         if len(cfgs) > 1:
-            log(f"\n=== case {cfg['case_name']}")
+            log(f"\n=== project {cfg['project_name']}")
         print_sync_summary(res)
-        results[cfg["_case"]] = res
+        results[cfg["_project"]] = res
     if args.json:
         print(json.dumps(results if len(cfgs) > 1 else next(iter(results.values())), indent=2))
 
@@ -1173,7 +1208,7 @@ def pr_documentation_verdict(files: List[str], labels: List[str], cfg: Dict) -> 
     watched = [f for f in files if bucket_for(f, cfg) == "watch"]
     docs = [f for f in files if bucket_for(f, cfg) == "docs"]
     if watched and not docs:
-        return False, f"{len(watched)} pipeline file(s) changed but no {cfg['docs_dir']} or {cfg.get('_case_rel', '.docsync/')}audit.jsonl change"
+        return False, f"{len(watched)} pipeline file(s) changed but no {cfg['docs_dir']} or {cfg.get('_project_rel', '.docsync/')}audit.jsonl change"
     return True, "documented" if docs else "no pipeline code changed"
 
 
@@ -1199,7 +1234,7 @@ def trunk_worktree(root: Path, trunk: str) -> Tuple[Path, bool]:
 def cmd_merge_publish(args: argparse.Namespace) -> None:
     """Local alternative to the CI publish job: verify, merge the PR with gh, publish from the merged trunk."""
     root = repo_root()
-    cfgs = load_all_configs(root, args.case)
+    cfgs = load_all_configs(root, args.project)
     trunk = cfgs[0].get("base_branch", "main")
     if shutil.which("gh") is None:
         die("GitHub CLI `gh` is required for merge-publish (brew install gh; gh auth login)")
@@ -1214,10 +1249,10 @@ def cmd_merge_publish(args: argparse.Namespace) -> None:
     print(f"PR #{pr['number']}: {pr['title']}  ({pr['headRefName']} -> {trunk})")
     ok = True
     for cfg in cfgs:
-        case_ok, reason = pr_documentation_verdict(files, labels, cfg)
-        tag = f"[{cfg['case_name']}] " if len(cfgs) > 1 else ""
-        print(f"{tag}documentation check: {'OK' if case_ok else 'FAIL'} — {reason}")
-        ok = ok and case_ok
+        project_ok, reason = pr_documentation_verdict(files, labels, cfg)
+        tag = f"[{cfg['project_name']}] " if len(cfgs) > 1 else ""
+        print(f"{tag}documentation check: {'OK' if project_ok else 'FAIL'} — {reason}")
+        ok = ok and project_ok
     if not ok and not args.force:
         die("refusing to merge an undocumented PR. Run /docsync:update on the branch, or pass --force.")
     failing = [c for c in pr.get("statusCheckRollup") or []
@@ -1245,14 +1280,14 @@ def cmd_merge_publish(args: argparse.Namespace) -> None:
         if not temporary:
             run_git(["pull", "--ff-only", "origin", trunk], cwd=wt)
         results = {}
-        for wt_cfg in load_all_configs(wt, args.case):
+        for wt_cfg in load_all_configs(wt, args.project):
             client = client_from_env(wt_cfg, dry_run=False)
             result = sync(wt_cfg, client, merge_sha, str(args.pr), respect_manual=not wt_cfg.get("overwrite_manual_edits", True),
                           force=False, out_dir=None)
             if len(cfgs) > 1:
-                log(f"\n=== case {wt_cfg['case_name']}")
+                log(f"\n=== project {wt_cfg['project_name']}")
             print_sync_summary(result)
-            results[wt_cfg["_case"]] = result
+            results[wt_cfg["_project"]] = result
         if args.json:
             print(json.dumps(results if len(results) > 1 else next(iter(results.values())), indent=2))
     except ScopeError as exc:
@@ -1263,7 +1298,7 @@ def cmd_merge_publish(args: argparse.Namespace) -> None:
 
 
 def cmd_audit(args: argparse.Namespace) -> None:
-    cfg = load_config(repo_root(), args.case)   # one case at a time; dies with the case list when ambiguous
+    cfg = load_config(repo_root(), args.project)   # one project at a time; dies with the project list when ambiguous
     if args.audit_cmd == "add":
         raw = args.json if args.json else sys.stdin.read()
         try:
@@ -1289,18 +1324,18 @@ def cmd_audit(args: argparse.Namespace) -> None:
         print("audit log OK" if not bad else f"{bad} invalid entries")
         sys.exit(1 if bad else 0)
     elif args.audit_cmd == "render":
-        print(render_changelog(read_audit(cfg), cfg.get("case_name", "")))
+        print(render_changelog(read_audit(cfg), cfg.get("project_name", "")))
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    cfgs = load_all_configs(repo_root(), args.case)
+    cfgs = load_all_configs(repo_root(), args.project)
     if len(cfgs) > 1:
-        print(f"cases     : {', '.join(c['_case'] for c in cfgs)}  (pass --case <name> to address one)\n")
+        print(f"projects     : {', '.join(c['_project'] for c in cfgs)}  (pass --project <name> to address one)\n")
     for cfg in cfgs:
         pages = load_pages(cfg)
         warnings = render_pages(cfg, pages)
         prefix = cfg["confluence"].get("title_prefix", "") or ""
-        print(f"case      : {cfg.get('case_name')}  (config {cfg['_case_rel']}config.yaml, brief {cfg['_case_rel']}case-context.md)")
+        print(f"project      : {cfg.get('project_name')}  (config {cfg['_project_rel']}config.yaml, brief {cfg['_project_rel']}project-context.md)")
         print(f"root page : {cfg['confluence'].get('root_page_id')}  space: {cfg['confluence'].get('space_key')}  prefix: '{prefix}'")
         print(f"pages     : {len(pages)} in {cfg['docs_dir']}")
         for p in pages:
@@ -1327,24 +1362,24 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="docsync", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--case", help="which case (project) in a multi-case repo; default: all, or the only one")
+    common.add_argument("--project", help="which project in a multi-project repo; default: all, or the only one")
 
-    p = sub.add_parser("init", help="bootstrap a docsync case in the current repo (run once per project)")
-    p.add_argument("--case-name", help="project name; required when the repo already has a case")
-    p.add_argument("--docs-dir", help="where the pages live (default docs/confluence for the first case, docs/<case> after)")
-    p.add_argument("--space", help="Confluence space key, e.g. MMM")
+    p = sub.add_parser("init", help="bootstrap a docsync project in the current repo (run once per project)")
+    p.add_argument("--project-name", help="project name; required when the repo already has a project")
+    p.add_argument("--docs-dir", help="where the pages live (default docs/confluence for the first project, docs/<project> after)")
+    p.add_argument("--space", help="Confluence space key, e.g. DATA")
     p.add_argument("--root-page", help="root page id or URL; docsync only writes under this page")
-    p.add_argument("--title-prefix", help="prefix for every page title so titles stay unique in the space, e.g. '[MMM] '")
+    p.add_argument("--title-prefix", help="prefix for every page title so titles stay unique in the space, e.g. '[DATA] '")
     p.add_argument("--base-branch", default="main")
     p.add_argument("--publish-mode", choices=["ci", "local"], default="ci",
                    help="ci: GitHub Actions publishes on merge (needs repo secrets). local: you merge+publish with `merge-publish`")
     p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_init)
 
-    p = sub.add_parser("upgrade", help="refresh the vendored copy in .docsync/bin from the plugin")
+    p = sub.add_parser("upgrade", help="refresh the vendored copy in .docsync/bin from the plugin; renames the pre-0.3 .docsync/cases/ layout")
     p.set_defaults(fn=cmd_upgrade)
 
-    p = sub.add_parser("migrate", help="move a single-case repo to the multi-case layout .docsync/cases/<case>/")
+    p = sub.add_parser("migrate", help="move a single-project repo to the multi-project layout .docsync/projects/<project>/")
     p.set_defaults(fn=cmd_migrate)
 
     p = sub.add_parser("doctor", parents=[common], help="check credentials, root page, space and list in-scope pages")

@@ -2,7 +2,7 @@
 title: Who does what
 order: 10
 ---
-<!-- Ownership, cadence and hand-offs. One row per recurring hand-off. Source: case-context.md "Hand-offs". -->
+<!-- Ownership, cadence and hand-offs. One row per recurring hand-off. Source: project-context.md "Hand-offs". -->
 
 [TOC]
 

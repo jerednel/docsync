@@ -1,7 +1,7 @@
-# docsync — documentation agent for data-engineering casework
+# docsync — documentation agent for data-engineering projects
 
-A Claude Code plugin that keeps one Confluence section in sync with the code on every client case.
-Install it once; run `/docsync:init` in each new case repo.
+A Claude Code plugin that keeps one Confluence section in sync with the code on every data project.
+Install it once; run `/docsync:init` in each new project repo.
 
 ## What it does
 
@@ -13,7 +13,7 @@ Install it once; run `/docsync:init` in each new case repo.
     write audit entry)                   entry must change              scoped, hash-diffed)    page you chose
 ```
 
-- **Docs-as-code.** Each Confluence page is a markdown file in the case's `docs_dir` (default `docs/confluence/`). Doc changes ride in the same
+- **Docs-as-code.** Each Confluence page is a markdown file in the project's `docs_dir` (default `docs/confluence/`). Doc changes ride in the same
   PR as the code, so they merge with it and work naturally with git worktrees.
 - **Every change is evaluated.** `/docsync:update` groups the diff into logical changes and classifies each one
   with a fixed rubric (`reference/classification.md`): business logic, storage paths, tables, new features,
@@ -41,12 +41,12 @@ Install it once; run `/docsync:init` in each new case repo.
 | `agents/data-doc-agent.md` | Subagent persona that runs `update`/`check` off the main thread |
 | `reference/` | Classification rubric, page model, writing rules the skills read |
 | `scripts/docsync.py` | The tool: init, doctor, changed, gate, render, plan, push, audit, status |
-| `templates/` | Per-case config, case brief, nine page skeletons, GitHub workflow |
+| `templates/` | Per-project config, project brief, nine page skeletons, GitHub workflow |
 | `hooks/` | SessionStart reminder when the cwd is a docsync-enabled repo |
 | `tests/` | Unit + end-to-end tests with an in-memory fake Confluence |
 | `docs/USAGE.md`, `docs/TESTING.md` | Runbooks |
 
-## Install once, use on every case
+## Install once, use on every project
 
 ```bash
 # from any directory
@@ -54,9 +54,9 @@ claude plugin marketplace add jerednel/docsync     # registers the marketplace "
 claude plugin install docsync@jeremy-tools         # installs for your user, all projects
 claude plugin list                                 # confirm
 ```
-Developing the plugin itself? Add the checkout instead: `claude plugin marketplace add /Users/69348/git/docsync`.
+Developing the plugin itself? Add the checkout instead: `claude plugin marketplace add ~/git/docsync`.
 
-To make a case repo prompt teammates to install it, add to the repo's `.claude/settings.json`:
+To make a project repo prompt teammates to install it, add to the repo's `.claude/settings.json`:
 ```json
 {
   "extraKnownMarketplaces": { "jeremy-tools": { "source": { "source": "github", "repo": "jerednel/docsync" } } },
@@ -68,18 +68,18 @@ plugin source, bump `version` in `.claude-plugin/plugin.json`, then:
 ```bash
 claude plugin marketplace update jeremy-tools && claude plugin update docsync@jeremy-tools
 ```
-Restart Claude Code to pick it up. To try uncommitted edits in one session without reinstalling: `claude --plugin-dir /Users/69348/git/docsync`.
+Restart Claude Code to pick it up. To try uncommitted edits in one session without reinstalling: `claude --plugin-dir ~/git/docsync`.
 
 Python side (once per machine and once per CI runner): `pip install -r scripts/requirements.txt`
 (`requests`, `markdown`, `pyyaml`; Python 3.9+).
 
-## Per case, in five lines
+## Per project, in five lines
 
 ```bash
-cd ~/git/<case-repo>
-export CONFLUENCE_BASE_URL=https://<site>.atlassian.net/wiki CONFLUENCE_EMAIL=you@bain.com CONFLUENCE_API_TOKEN=...
+cd ~/git/<project-repo>
+export CONFLUENCE_BASE_URL=https://<site>.atlassian.net/wiki CONFLUENCE_EMAIL=you@example.com CONFLUENCE_API_TOKEN=...
 claude
-> /docsync:init --space MMM --root-page https://<site>.atlassian.net/wiki/spaces/MMM/pages/123456/Data --title-prefix "[MMM] " --publish-mode local
+> /docsync:init --space DATA --root-page https://<site>.atlassian.net/wiki/spaces/DATA/pages/123456/Data --title-prefix "[DATA] " --publish-mode local
 ```
 `--publish-mode ci` instead if you can add the three `CONFLUENCE_*` values as GitHub Actions secrets. See `docs/USAGE.md`.
 
@@ -105,19 +105,23 @@ claude
 
 ## Several projects in one repo
 
-A repo can hold one docsync **case** per project or team, each with its own Confluence root, title prefix,
+A repo can hold one docsync **project** per team or workstream, each with its own Confluence root, title prefix,
 docs dir, watch paths, brief and audit log:
 
 ```
-.docsync/config.yaml                 shared: base_branch, publish_mode, overwrite_manual_edits, changelog_page
-.docsync/cases/<case>/config.yaml    the case: confluence root, title_prefix, docs_dir, watch_paths
-.docsync/cases/<case>/case-context.md
-.docsync/cases/<case>/audit.jsonl
-docs/<case>/*.md                     the pages
+.docsync/config.yaml                            shared: base_branch, publish_mode, overwrite_manual_edits, changelog_page
+.docsync/projects/<project>/config.yaml         the project: confluence root, title_prefix, docs_dir, watch_paths
+.docsync/projects/<project>/project-context.md
+.docsync/projects/<project>/audit.jsonl
+docs/<project>/*.md                             the pages
 ```
 
-Add a project with `/docsync:init --case-name <name> --space <KEY> --root-page <url> --title-prefix '[<name>] '`.
-The first `init` in a repo still creates the single-case layout; a second one moves that case into
-`.docsync/cases/` (`docsync migrate` does the same by hand). `gate`, `push`, `status` and `doctor` run over every
-case by default; `audit add` and any command aimed at one case take `--case <name>` (or `DOCSYNC_CASE`).
-A change is gated only against the case whose `watch_paths` it touches.
+Add a project with `/docsync:init --project-name <name> --space <KEY> --root-page <url> --title-prefix '[<name>] '`.
+The first `init` in a repo still creates the single-project layout; a second one moves that project into
+`.docsync/projects/` (`docsync migrate` does the same by hand). `gate`, `push`, `status` and `doctor` run over every
+project by default; `audit add` and any command aimed at one project take `--project <name>` (or `DOCSYNC_PROJECT`).
+A change is gated only against the project whose `watch_paths` it touches.
+
+Repos set up with docsync 0.2 used the word **case** for this (`.docsync/cases/`, `case-context.md`, `case_name`).
+After updating the plugin, run `python3 .docsync/bin/docsync.py upgrade` in each such repo: it renames them in place and
+keeps reading `case_name` until you do.

@@ -10,5 +10,5 @@
       "description": "Data-pipeline documentation agent: docs-as-code pages published to a scoped Confluence tree with change classification and audit log."
     }
   ],
-  "description": "Jeremy's reusable Claude Code plugins for data engineering casework."
+  "description": "Jeremy's reusable Claude Code plugins for data-engineering projects."
 }

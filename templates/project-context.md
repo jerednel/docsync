@@ -1,4 +1,4 @@
-# Case context for documentation
+# Project context for documentation
 
 <!-- This file is the brief the documentation agent reads before every update.
      Keep it current: it is the ONLY place the agent learns things that are not in the code.
@@ -10,10 +10,10 @@
 ## Who is who
 | Role | Name / team | Owns | Contact |
 |---|---|---|---|
-| Client data owner | | source systems, access | |
+| Source data owner | | source systems, access | |
 | 3rd-party data provider | | landing files to S3 | |
 | Data engineering (us) | | pipelines, tables, this documentation | |
-| Marketing analytics | | reads marts, builds dashboards | |
+| Analytics | | reads marts, builds dashboards | |
 | Data science | | models on top of marts | |
 
 ## Hand-offs and cadence
@@ -30,11 +30,11 @@
      currency, fiscal calendar, deduplication policy, late-arriving data policy. -->
 
 ## Known assumptions and business rules already agreed
-<!-- Anything a marketing analyst would be surprised by. e.g. "Returns are netted at day level",
+<!-- Anything an analyst would be surprised by. e.g. "Returns are netted at day level",
      "Spend is allocated by impressions share", "Pre-2023 history excluded because..." -->
 
 ## Audience notes
 <!-- Who reads the docs, what they typically need, and what confuses them today. -->
 
 ## Out of scope for documentation
-<!-- Things the agent should NOT document (e.g. other teams' repos, client-internal systems). -->
+<!-- Things the agent should NOT document (e.g. other teams' repos, upstream systems you do not own). -->

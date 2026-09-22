@@ -1,7 +1,7 @@
 {
   "name": "docsync",
   "description": "Keep a scoped Confluence section in sync with data-pipeline code: classifies each change for documentation impact, maintains docs-as-code pages and an audit log, publishes via the Confluence API on merge.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "Jeremy Nelson"
   },

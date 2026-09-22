@@ -1,7 +1,7 @@
 # Writing rules for documentation pages
 
 Definition of done for every page you touch: **Relevant, Sensible, Effective, Complete.**
-A PM, a marketing analyst and a data engineer must each find their answer in under a minute.
+A PM, an analyst and a data engineer must each find their answer in under a minute.
 
 ## Structure
 - **Answer first.** The first sentence of any section states the fact. Reasons and caveats follow.

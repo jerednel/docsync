@@ -1,15 +1,15 @@
-# docsync configuration — committed to the case repo, shared by every worktree.
+# docsync configuration — committed to the project repo, shared by every worktree.
 # Secrets are NOT stored here. Set these environment variables (locally and as CI secrets):
 #   CONFLUENCE_BASE_URL   e.g. https://yourcompany.atlassian.net/wiki
 #   CONFLUENCE_EMAIL      the Atlassian account that owns the API token
 #   CONFLUENCE_API_TOKEN  https://id.atlassian.com/manage-profile/security/api-tokens
 
-case_name: "__CASE_NAME__"
+project_name: "__PROJECT_NAME__"
 
 confluence:
   space_key: "__SPACE_KEY__"          # safety check: root page must live in this space
   root_page_id: "__ROOT_PAGE_ID__"    # the ONLY page whose subtree docsync may touch
-  title_prefix: "__TITLE_PREFIX__"    # Confluence titles must be unique per space; e.g. "[MMM] "
+  title_prefix: "__TITLE_PREFIX__"    # Confluence titles must be unique per space; e.g. '[DATA] '
 
 docs_dir: __DOCS_DIR__                # one markdown file = one Confluence page
 base_branch: __BASE_BRANCH__          # trunk that PRs merge into

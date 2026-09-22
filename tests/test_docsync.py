@@ -104,7 +104,7 @@ class TestHelpers(unittest.TestCase):
             {"ts": "2026-02-01T00:00:00Z", "commit": "abc", "summary": "new|pipe", "category": "business-logic", "verdict": "documented", "rationale": "r", "pages": ["Pipelines"]},
             {"ts": "2026-03-01T00:00:00Z", "pr": "3", "summary": "rename var", "category": "other", "verdict": "excluded", "rationale": "refactor"},
         ]
-        md = docsync.render_changelog(entries, "case")
+        md = docsync.render_changelog(entries, "project")
         self.assertLess(md.index("new\\|pipe"), md.index("| old |"))
         self.assertIn("## Evaluated and excluded", md)
         self.assertIn("rename var", md.split("## Evaluated and excluded")[1])
@@ -151,7 +151,7 @@ class TestEndToEnd(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.tmp), "config", "user.name", "t"], check=True)
         self.cwd = os.getcwd()
         os.chdir(self.tmp)
-        docsync.main(["init", "--case-name", "TestCase", "--space", "MMM", "--root-page",
+        docsync.main(["init", "--project-name", "TestProject", "--space", "MMM", "--root-page",
                       "https://x.atlassian.net/wiki/spaces/MMM/pages/100/Root", "--title-prefix", "[T] "])
         subprocess.run(["git", "add", "-A"], check=True)
         subprocess.run(["git", "commit", "-qm", "init docsync (#7)"], check=True)
@@ -162,7 +162,7 @@ class TestEndToEnd(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def test_init_created_expected_files(self):
-        for rel in (".docsync/config.yaml", ".docsync/case-context.md", ".docsync/audit.jsonl", ".docsync/bin/docsync.py",
+        for rel in (".docsync/config.yaml", ".docsync/project-context.md", ".docsync/audit.jsonl", ".docsync/bin/docsync.py",
                     "docs/confluence/00-start-here.md", ".github/workflows/docsync.yml"):
             self.assertTrue((self.tmp / rel).exists(), rel)
         self.assertEqual(self.cfg["confluence"]["root_page_id"], "100")
@@ -298,7 +298,7 @@ class TestInitLocalMode(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp()); cwd = os.getcwd(); os.chdir(tmp)
         try:
             subprocess.run(["git", "init", "-q", "-b", "main", "."], check=True)
-            docsync.main(["init", "--case-name", "L", "--space", "X", "--root-page", "5", "--publish-mode", "local"])
+            docsync.main(["init", "--project-name", "L", "--space", "X", "--root-page", "5", "--publish-mode", "local"])
             wf = yaml.safe_load((tmp / ".github/workflows/docsync.yml").read_text())
             self.assertEqual(list(wf["jobs"]), ["gate"])
             cfg = yaml.safe_load((tmp / ".docsync/config.yaml").read_text())
@@ -313,7 +313,7 @@ class TestPullWithFake(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp()); cwd = os.getcwd(); os.chdir(tmp)
         try:
             subprocess.run(["git", "init", "-q", "-b", "main", "."], check=True)
-            docsync.main(["init", "--case-name", "P", "--space", "MMM", "--root-page", "100"])
+            docsync.main(["init", "--project-name", "P", "--space", "MMM", "--root-page", "100"])
             fake = FakeConfluence()
             fake.pages["200"] = {"id": "200", "title": "Legacy owners", "parentId": "100", "spaceId": "S1",
                                  "version": {"number": 1}, "body": {"storage": {"value": "<p>Provider lands Mondays</p>"}}}
@@ -334,9 +334,9 @@ class TestPullWithFake(unittest.TestCase):
             os.chdir(cwd); shutil.rmtree(tmp)
 
 
-class TestMultiCase(unittest.TestCase):
-    """Two projects in one repo: a second `init --case-name` migrates the first case to .docsync/cases/<case>/,
-    each case gates and syncs against its own docs dir, root page and audit log."""
+class TestMultiProject(unittest.TestCase):
+    """Two projects in one repo: a second `init --project-name` migrates the first project to .docsync/projects/<project>/,
+    each project gates and syncs against its own docs dir, root page and audit log."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -345,10 +345,10 @@ class TestMultiCase(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.tmp), "config", "user.name", "t"], check=True)
         self.cwd = os.getcwd()
         os.chdir(self.tmp)
-        docsync.main(["init", "--case-name", "alpha", "--space", "MMM", "--root-page", "100", "--title-prefix", "[A] "])
+        docsync.main(["init", "--project-name", "alpha", "--space", "MMM", "--root-page", "100", "--title-prefix", "[A] "])
         subprocess.run(["git", "add", "-A"], check=True)
         subprocess.run(["git", "commit", "-qm", "init alpha"], check=True)
-        docsync.main(["init", "--case-name", "beta", "--space", "MMM", "--root-page", "200", "--title-prefix", "[B] "])
+        docsync.main(["init", "--project-name", "beta", "--space", "MMM", "--root-page", "200", "--title-prefix", "[B] "])
         subprocess.run(["git", "add", "-A"], check=True)
         subprocess.run(["git", "commit", "-qm", "init beta"], check=True)
 
@@ -356,55 +356,55 @@ class TestMultiCase(unittest.TestCase):
         os.chdir(self.cwd)
         shutil.rmtree(self.tmp)
 
-    def test_second_init_migrates_first_case_and_creates_second(self):
+    def test_second_init_migrates_first_project_and_creates_second(self):
         import yaml
-        self.assertEqual(docsync.list_cases(self.tmp), ["alpha", "beta"])
-        for rel in (".docsync/cases/alpha/config.yaml", ".docsync/cases/alpha/case-context.md", ".docsync/cases/alpha/audit.jsonl",
-                    ".docsync/cases/beta/config.yaml", ".docsync/cases/beta/case-context.md", ".docsync/cases/beta/audit.jsonl",
+        self.assertEqual(docsync.list_projects(self.tmp), ["alpha", "beta"])
+        for rel in (".docsync/projects/alpha/config.yaml", ".docsync/projects/alpha/project-context.md", ".docsync/projects/alpha/audit.jsonl",
+                    ".docsync/projects/beta/config.yaml", ".docsync/projects/beta/project-context.md", ".docsync/projects/beta/audit.jsonl",
                     "docs/confluence/00-start-here.md", "docs/beta/00-start-here.md"):
             self.assertTrue((self.tmp / rel).exists(), rel)
         shared = yaml.safe_load((self.tmp / ".docsync/config.yaml").read_text())
         self.assertEqual(shared["base_branch"], "main")
         self.assertNotIn("confluence", shared)
-        beta_raw = yaml.safe_load((self.tmp / ".docsync/cases/beta/config.yaml").read_text())
+        beta_raw = yaml.safe_load((self.tmp / ".docsync/projects/beta/config.yaml").read_text())
         self.assertNotIn("publish_mode", beta_raw)          # inherited from the shared file
         a = docsync.load_config(self.tmp, "alpha"); b = docsync.load_config(self.tmp, "beta")
-        self.assertEqual((a["docs_dir"], a["confluence"]["root_page_id"], a["_case_rel"]), ("docs/confluence", "100", ".docsync/cases/alpha/"))
+        self.assertEqual((a["docs_dir"], a["confluence"]["root_page_id"], a["_project_rel"]), ("docs/confluence", "100", ".docsync/projects/alpha/"))
         self.assertEqual((b["docs_dir"], b["confluence"]["root_page_id"], b["publish_mode"]), ("docs/beta", "200", "ci"))
         wf = (self.tmp / ".github/workflows/docsync.yml").read_text()
         self.assertIn('- "docs/confluence/**"', wf)
         self.assertIn('- "docs/beta/**"', wf)
 
-    def test_ambiguous_case_dies_and_env_resolves_it(self):
+    def test_ambiguous_project_dies_and_env_resolves_it(self):
         with self.assertRaises(SystemExit):
             docsync.load_config(self.tmp)
-        os.environ["DOCSYNC_CASE"] = "beta"
+        os.environ["DOCSYNC_PROJECT"] = "beta"
         try:
-            self.assertEqual(docsync.load_config(self.tmp)["case_name"], "beta")
+            self.assertEqual(docsync.load_config(self.tmp)["project_name"], "beta")
         finally:
-            del os.environ["DOCSYNC_CASE"]
-        self.assertEqual([c["case_name"] for c in docsync.load_all_configs(self.tmp)], ["alpha", "beta"])
+            del os.environ["DOCSYNC_PROJECT"]
+        self.assertEqual([c["project_name"] for c in docsync.load_all_configs(self.tmp)], ["alpha", "beta"])
 
-    def test_gate_is_per_case(self):
+    def test_gate_is_per_project(self):
         a = docsync.load_config(self.tmp, "alpha"); b = docsync.load_config(self.tmp, "beta")
-        (self.tmp / ".docsync/cases/alpha/config.yaml").write_text(
-            (self.tmp / ".docsync/cases/alpha/config.yaml").read_text().replace('  - "**/*.sql"', '  - "alpha/**/*.sql"'))
-        (self.tmp / ".docsync/cases/beta/config.yaml").write_text(
-            (self.tmp / ".docsync/cases/beta/config.yaml").read_text().replace('  - "**/*.sql"', '  - "beta/**/*.sql"'))
+        (self.tmp / ".docsync/projects/alpha/config.yaml").write_text(
+            (self.tmp / ".docsync/projects/alpha/config.yaml").read_text().replace('  - "**/*.sql"', '  - "alpha/**/*.sql"'))
+        (self.tmp / ".docsync/projects/beta/config.yaml").write_text(
+            (self.tmp / ".docsync/projects/beta/config.yaml").read_text().replace('  - "**/*.sql"', '  - "beta/**/*.sql"'))
         a = docsync.load_config(self.tmp, "alpha"); b = docsync.load_config(self.tmp, "beta")
         # beta's audit entry does not satisfy alpha's gate; alpha's docs do
-        self.assertEqual(docsync.bucket_for(".docsync/cases/beta/audit.jsonl", a), "other")
-        self.assertEqual(docsync.bucket_for(".docsync/cases/beta/audit.jsonl", b), "docs")
+        self.assertEqual(docsync.bucket_for(".docsync/projects/beta/audit.jsonl", a), "other")
+        self.assertEqual(docsync.bucket_for(".docsync/projects/beta/audit.jsonl", b), "docs")
         self.assertEqual(docsync.bucket_for("docs/confluence/30-pipelines.md", a), "docs")
-        self.assertEqual(docsync.bucket_for("docs/beta/30-pipelines.md", a), "ignore")   # another case's page is not alpha's docs
+        self.assertEqual(docsync.bucket_for("docs/beta/30-pipelines.md", a), "ignore")   # another project's page is not alpha's docs
         self.assertEqual(docsync.bucket_for("alpha/models/x.sql", a), "watch")
         self.assertEqual(docsync.bucket_for("alpha/models/x.sql", b), "other")
-        ok, _ = docsync.pr_documentation_verdict(["alpha/models/x.sql", ".docsync/cases/beta/audit.jsonl"], [], a)
+        ok, _ = docsync.pr_documentation_verdict(["alpha/models/x.sql", ".docsync/projects/beta/audit.jsonl"], [], a)
         self.assertFalse(ok)
-        ok, _ = docsync.pr_documentation_verdict(["alpha/models/x.sql", ".docsync/cases/alpha/audit.jsonl"], [], a)
+        ok, _ = docsync.pr_documentation_verdict(["alpha/models/x.sql", ".docsync/projects/alpha/audit.jsonl"], [], a)
         self.assertTrue(ok)
 
-    def test_each_case_syncs_to_its_own_root(self):
+    def test_each_project_syncs_to_its_own_root(self):
         a = docsync.load_config(self.tmp, "alpha"); b = docsync.load_config(self.tmp, "beta")
         docsync.audit_add(b, {"summary": "s", "category": "tables", "verdict": "documented", "rationale": "r",
                               "files": ["beta/x.sql"], "pages": ["Tables and datasets"]})
@@ -416,19 +416,66 @@ class TestMultiCase(unittest.TestCase):
         self.assertIn("[A] Start Here", ra["created"]); self.assertIn("[B] Start Here", rb["created"])
         self.assertNotIn("[B] Start Here", ra["created"])
         self.assertEqual(docsync.scratch_dir(a, "out"), self.tmp / ".docsync/out/alpha")
-        self.assertEqual(a["_case"], "alpha")
+        self.assertEqual(a["_project"], "alpha")
 
-    def test_migrate_command_on_single_case_repo(self):
+    def test_migrate_command_on_single_project_repo(self):
         tmp = Path(tempfile.mkdtemp()); os.chdir(tmp)
         try:
             subprocess.run(["git", "init", "-q", "-b", "main", "."], check=True)
-            docsync.main(["init", "--case-name", "solo", "--space", "X", "--root-page", "5"])
-            self.assertEqual(docsync.list_cases(tmp), [])
+            docsync.main(["init", "--project-name", "solo", "--space", "X", "--root-page", "5"])
+            self.assertEqual(docsync.list_projects(tmp), [])
             docsync.main(["migrate"])
-            self.assertEqual(docsync.list_cases(tmp), ["solo"])
-            self.assertTrue((tmp / ".docsync/cases/solo/case-context.md").exists())
-            self.assertFalse((tmp / ".docsync/case-context.md").exists())
+            self.assertEqual(docsync.list_projects(tmp), ["solo"])
+            self.assertTrue((tmp / ".docsync/projects/solo/project-context.md").exists())
+            self.assertFalse((tmp / ".docsync/project-context.md").exists())
             cfg = docsync.load_config(tmp)
-            self.assertEqual((cfg["case_name"], cfg["docs_dir"], cfg["_case_rel"]), ("solo", "docs/confluence", ".docsync/cases/solo/"))
+            self.assertEqual((cfg["project_name"], cfg["docs_dir"], cfg["_project_rel"]), ("solo", "docs/confluence", ".docsync/projects/solo/"))
         finally:
             os.chdir(self.tmp); shutil.rmtree(tmp)
+
+
+class TestLegacyCaseLayoutUpgrade(unittest.TestCase):
+    """Repos set up before 0.3 used 'case' vocabulary: .docsync/cases/<case>/, case-context.md, case_name:.
+    `upgrade` renames them; `load_config` reads case_name until then and refuses the old directory with a hint."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()); self.cwd = os.getcwd(); os.chdir(self.tmp)
+        subprocess.run(["git", "init", "-q", "-b", "main", "."], check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], check=True)
+        subprocess.run(["git", "config", "user.name", "t"], check=True)
+
+    def tearDown(self):
+        os.chdir(self.cwd); shutil.rmtree(self.tmp)
+
+    def _rename_to_legacy(self, d: Path):
+        (d / "case-context.md").write_text((d / "project-context.md").read_text()); (d / "project-context.md").unlink()
+        cfg = d / "config.yaml"
+        cfg.write_text(cfg.read_text().replace("project_name:", "case_name:"))
+
+    def test_single_layout_reads_case_name_and_upgrade_renames(self):
+        docsync.main(["init", "--project-name", "solo", "--space", "X", "--root-page", "5"])
+        self._rename_to_legacy(self.tmp / ".docsync")
+        subprocess.run(["git", "add", "-A"], check=True); subprocess.run(["git", "commit", "-qm", "legacy"], check=True)
+        self.assertEqual(docsync.load_config(self.tmp)["project_name"], "solo")   # fallback while un-upgraded
+        docsync.main(["upgrade"])
+        self.assertTrue((self.tmp / ".docsync/project-context.md").exists())
+        self.assertFalse((self.tmp / ".docsync/case-context.md").exists())
+        self.assertIn("project_name:", (self.tmp / ".docsync/config.yaml").read_text())
+        self.assertNotIn("case_name:", (self.tmp / ".docsync/config.yaml").read_text())
+        self.assertEqual(docsync.upgrade_legacy_names(self.tmp), [])   # idempotent
+
+    def test_multi_layout_dies_with_hint_then_upgrade_moves_cases_dir(self):
+        docsync.main(["init", "--project-name", "alpha", "--space", "X", "--root-page", "5"])
+        docsync.main(["init", "--project-name", "beta", "--space", "X", "--root-page", "6"])
+        for d in (self.tmp / ".docsync/projects").iterdir():
+            self._rename_to_legacy(d)
+        shutil.move(str(self.tmp / ".docsync/projects"), str(self.tmp / ".docsync/cases"))
+        subprocess.run(["git", "add", "-A"], check=True); subprocess.run(["git", "commit", "-qm", "legacy"], check=True)
+        with self.assertRaises(SystemExit):
+            docsync.load_config(self.tmp, "alpha")
+        docsync.main(["upgrade"])
+        self.assertEqual(docsync.list_projects(self.tmp), ["alpha", "beta"])
+        self.assertFalse((self.tmp / ".docsync/cases").exists())
+        self.assertTrue((self.tmp / ".docsync/projects/beta/project-context.md").exists())
+        b = docsync.load_config(self.tmp, "beta")
+        self.assertEqual((b["project_name"], b["_project_rel"]), ("beta", ".docsync/projects/beta/"))

@@ -5,7 +5,7 @@ disable-model-invocation: true
 argument-hint: "[--no-pull] [notes]"
 allowed-tools: Bash Read Edit Write Grep Glob
 ---
-> **Paths.** A repo holds one docsync case per project. `<case_dir>` is `.docsync/cases/<case>/` (or `.docsync/` in a single-case repo) and holds `config.yaml`, `case-context.md`, `audit.jsonl`. `<docs_dir>` is the `docs_dir` in that config (default `docs/<case>/`, or `docs/confluence/` in a single-case repo). `python3 .docsync/bin/docsync.py status` lists the cases. With several, work on the case whose `watch_paths` match the change and pass `--case <case>` to every docsync command.
+> **Paths.** A repo holds one docsync project per team or workstream. `<project_dir>` is `.docsync/projects/<project>/` (or `.docsync/` in a single-project repo) and holds `config.yaml`, `project-context.md`, `audit.jsonl`. `<docs_dir>` is the `docs_dir` in that config (default `docs/<project>/`, or `docs/confluence/` in a single-project repo). `python3 .docsync/bin/docsync.py status` lists the projects. With several, work on the project whose `watch_paths` match the change and pass `--project <project>` to every docsync command.
 
 
 Goal: after this run, every pipeline, table, storage location, rule, owner and convention in the repo is on
@@ -17,8 +17,8 @@ Read before step 3: `${CLAUDE_PLUGIN_ROOT}/reference/page-model.md`, `classifica
 ## Steps
 
 1. **Harvest what exists.** Unless `--no-pull` or credentials are missing:
-   `python3 .docsync/bin/docsync.py pull` saves every page under the root to `.docsync/imported/[<case>/]*.txt` with an
-   `index.json`. Read them all. Also read `<case_dir>/case-context.md`, `README*`, `CLAUDE.md`, `docs/**`, diagram
+   `python3 .docsync/bin/docsync.py pull` saves every page under the root to `.docsync/imported/[<project>/]*.txt` with an
+   `index.json`. Read them all. Also read `<project_dir>/project-context.md`, `README*`, `CLAUDE.md`, `docs/**`, diagram
    files, data dictionaries, and any notes in `$ARGUMENTS`. Done when you have a list of every fact these sources
    assert (owners, cadences, SLAs, paths, tables, rules), each tagged with its source.
 
@@ -35,18 +35,18 @@ Read before step 3: `${CLAUDE_PLUGIN_ROOT}/reference/page-model.md`, `classifica
    - **dead**: documented, absent from code → remove it; if it is an owner/process fact not derivable from code,
      keep it and mark "Unknown — <role> to confirm" if it cannot be verified.
    - **harvest**: only in imported pages (owners, cadences, decisions) and still plausible → move it to its home
-     page and to `<case_dir>/case-context.md`.
+     page and to `<project_dir>/project-context.md`.
    Done when every row has one of these four outcomes.
 
 4. **Rewrite the pages.** Apply the outcomes page by page, following the page model (one home per fact) and
    writing rules. Start Here gets the map and the who-to-ask table. Assumptions become numbered rules with
-   "where implemented" file paths. Replace every template placeholder. Update `<case_dir>/case-context.md` with
+   "where implemented" file paths. Replace every template placeholder. Update `<project_dir>/project-context.md` with
    harvested facts so future runs have the brief. Done when `grep -rn "TODO\|TBC\|PIPELINE_NAME\|SCHEMA.TABLE_NAME\|HAND-OFF NAME" <docs_dir>` returns nothing.
 
 5. **Record.** One audit entry with `category: backfill`, `verdict: documented`, `files: ["<repo>"]`, `pages:`
    every page rewritten, and a `rationale` that counts missing/stale/dead/harvested items closed. Add separate
    entries for any business rule you discovered in code that no document had ever stated (`business-logic`),
-   since those are material findings for the client team.
+   since those are material findings for the project team.
 
 6. **Verify and preview.** `status` (no warnings), `render` each page, `gate` if on a branch, and
    `plan --out` if credentials exist. Existing Confluence pages whose titles match will be **overwritten** on
